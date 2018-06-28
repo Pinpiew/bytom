@@ -10,10 +10,9 @@ import "io"
 func (Spend) typ() string { return "spend1" }
 func (s *Spend) writeForHash(w io.Writer) {
 	mustWriteForHash(w, s.SpentOutputId)
-	mustWriteForHash(w, s.Data)
-	mustWriteForHash(w, s.ExtHash)
 }
 
+// SetDestination will link the spend to the output
 func (s *Spend) SetDestination(id *Hash, val *AssetAmount, pos uint64) {
 	s.WitnessDestination = &ValueDestination{
 		Ref:      id,
@@ -23,14 +22,9 @@ func (s *Spend) SetDestination(id *Hash, val *AssetAmount, pos uint64) {
 }
 
 // NewSpend creates a new Spend.
-func NewSpend(spentOutputID *Hash, data *Hash, ordinal uint64) *Spend {
+func NewSpend(spentOutputID *Hash, ordinal uint64) *Spend {
 	return &Spend{
 		SpentOutputId: spentOutputID,
-		Data:          data,
 		Ordinal:       ordinal,
 	}
-}
-
-func (s *Spend) SetAnchored(id *Hash) {
-	s.WitnessAnchoredId = id
 }

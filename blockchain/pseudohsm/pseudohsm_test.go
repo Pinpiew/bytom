@@ -2,12 +2,54 @@ package pseudohsm
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/bytom/crypto/ed25519"
 	"github.com/bytom/errors"
 )
 
 const dirPath = "testdata/pseudo"
+
+func TestCreateKeyWithUpperCase(t *testing.T) {
+	hsm, _ := New(dirPath)
+
+	alias := "UPPER"
+
+	xpub, err := hsm.XCreate(alias, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if xpub.Alias != strings.ToLower(alias) {
+		t.Fatal("the created key alias should be lowercase")
+	}
+
+	err = hsm.XDelete(xpub.XPub, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateKeyWithWhiteSpaceTrimed(t *testing.T) {
+	hsm, _ := New(dirPath)
+
+	alias := " with space surrounding "
+
+	xpub, err := hsm.XCreate(alias, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if xpub.Alias != strings.TrimSpace(alias) {
+		t.Fatal("the created key alias should be lowercase")
+	}
+
+	err = hsm.XDelete(xpub.XPub, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPseudoHSMChainKDKeys(t *testing.T) {
 
@@ -44,10 +86,7 @@ func TestPseudoHSMChainKDKeys(t *testing.T) {
 		t.Error("expected verify with derived pubkey of sig from derived privkey to succeed")
 	}
 
-	xpubs, err := hsm.ListKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
+	xpubs := hsm.ListKeys()
 	if len(xpubs) != 2 {
 		t.Error("expected 2 entries in the db")
 	}
@@ -76,6 +115,38 @@ func TestKeyWithEmptyAlias(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestSignAndVerifyMessage(t *testing.T) {
+	hsm, _ := New(dirPath)
+	xpub, err := hsm.XCreate("TESTKEY", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := [][]byte{{3, 2, 6, 3, 8, 2, 7}}
+	derivedXPub := xpub.XPub.Derive(path)
+
+	msg := "this is a test message"
+	sig, err := hsm.XSign(xpub.XPub, path, []byte(msg), "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// derivedXPub verify success
+	if !ed25519.Verify(derivedXPub.PublicKey(), []byte(msg), sig) {
+		t.Fatal("right derivedXPub verify sign failed")
+	}
+
+	// rootXPub verify failed
+	if ed25519.Verify(xpub.XPub.PublicKey(), []byte(msg), sig) {
+		t.Fatal("right rootXPub verify derivedXPub sign succeed")
+	}
+
+	err = hsm.XDelete(xpub.XPub, "password")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

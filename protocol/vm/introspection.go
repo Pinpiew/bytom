@@ -28,10 +28,6 @@ func opCheckOutput(vm *virtualMachine) error {
 	if amount < 0 {
 		return ErrBadValue
 	}
-	data, err := vm.pop(true)
-	if err != nil {
-		return err
-	}
 	index, err := vm.popInt64(true)
 	if err != nil {
 		return err
@@ -44,7 +40,7 @@ func opCheckOutput(vm *virtualMachine) error {
 		return ErrContext
 	}
 
-	ok, err := vm.context.CheckOutput(uint64(index), data, uint64(amount), assetID, uint64(vmVersion), code, vm.expansionReserved)
+	ok, err := vm.context.CheckOutput(uint64(index), uint64(amount), assetID, uint64(vmVersion), code, vm.expansionReserved)
 	if err != nil {
 		return err
 	}
@@ -84,31 +80,6 @@ func opProgram(vm *virtualMachine) error {
 	return vm.push(vm.context.Code, true)
 }
 
-func opEntryData(vm *virtualMachine) error {
-	err := vm.applyCost(1)
-	if err != nil {
-		return err
-	}
-
-	if vm.context.EntryData == nil {
-		return ErrContext
-	}
-
-	return vm.push(*vm.context.EntryData, true)
-}
-
-func opTxData(vm *virtualMachine) error {
-	err := vm.applyCost(1)
-	if err != nil {
-		return err
-	}
-
-	if vm.context.TxData == nil {
-		return ErrContext
-	}
-	return vm.push(*vm.context.TxData, true)
-}
-
 func opIndex(vm *virtualMachine) error {
 	err := vm.applyCost(1)
 	if err != nil {
@@ -139,18 +110,6 @@ func opOutputID(vm *virtualMachine) error {
 		return ErrContext
 	}
 	return vm.push(*vm.context.SpentOutputID, true)
-}
-
-func opNonce(vm *virtualMachine) error {
-	err := vm.applyCost(1)
-	if err != nil {
-		return err
-	}
-
-	if vm.context.AnchorID == nil {
-		return ErrContext
-	}
-	return vm.push(*vm.context.AnchorID, true)
 }
 
 func opBlockHeight(vm *virtualMachine) error {

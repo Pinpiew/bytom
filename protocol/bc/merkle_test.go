@@ -5,8 +5,9 @@ import (
 	"time"
 
 	. "github.com/bytom/protocol/bc"
-	"github.com/bytom/protocol/bc/legacy"
+	"github.com/bytom/protocol/bc/types"
 	"github.com/bytom/protocol/vm"
+	"github.com/bytom/testutil"
 )
 
 func TestMerkleRoot(t *testing.T) {
@@ -15,49 +16,49 @@ func TestMerkleRoot(t *testing.T) {
 		want      Hash
 	}{{
 		witnesses: [][][]byte{
-			[][]byte{
+			{
 				{1},
 				[]byte("00000"),
 			},
 		},
-		want: mustDecodeHash("ddf6b62a276929250336a294b1f1863fe979a0f418f02aa9d098fca775573c3c"),
+		want: testutil.MustDecodeHash("fe34dbd5da0ce3656f423fd7aad7fc7e879353174d33a6446c2ed0e3f3512101"),
 	}, {
 		witnesses: [][][]byte{
-			[][]byte{
+			{
 				{1},
 				[]byte("000000"),
 			},
-			[][]byte{
+			{
 				{1},
 				[]byte("111111"),
 			},
 		},
-		want: mustDecodeHash("c5ca521b644f9b3a393e046566a9ca8f2eafd9f46c7cebbed38fa5cc2ebb3e4c"),
+		want: testutil.MustDecodeHash("0e4b4c1af18b8f59997804d69f8f66879ad5e30027346ee003ff7c7a512e5554"),
 	}, {
 		witnesses: [][][]byte{
-			[][]byte{
+			{
 				{1},
 				[]byte("000000"),
 			},
-			[][]byte{
+			{
 				{2},
 				[]byte("111111"),
 				[]byte("222222"),
 			},
 		},
-		want: mustDecodeHash("c5ca521b644f9b3a393e046566a9ca8f2eafd9f46c7cebbed38fa5cc2ebb3e4c"),
+		want: testutil.MustDecodeHash("0e4b4c1af18b8f59997804d69f8f66879ad5e30027346ee003ff7c7a512e5554"),
 	}}
 
 	for _, c := range cases {
 		var txs []*Tx
 		for _, wit := range c.witnesses {
-			txs = append(txs, legacy.NewTx(legacy.TxData{
-				Inputs: []*legacy.TxInput{
-					&legacy.TxInput{
+			txs = append(txs, types.NewTx(types.TxData{
+				Inputs: []*types.TxInput{
+					&types.TxInput{
 						AssetVersion: 1,
-						TypedInput: &legacy.SpendInput{
+						TypedInput: &types.SpendInput{
 							Arguments: wit,
-							SpendCommitment: legacy.SpendCommitment{
+							SpendCommitment: types.SpendCommitment{
 								AssetAmount: AssetAmount{
 									AssetId: &AssetID{V0: 0},
 								},
@@ -67,7 +68,7 @@ func TestMerkleRoot(t *testing.T) {
 				},
 			}).Tx)
 		}
-		got, err := MerkleRoot(txs)
+		got, err := TxMerkleRoot(txs)
 		if err != nil {
 			t.Fatalf("unexpected error %s", err)
 		}
@@ -79,29 +80,28 @@ func TestMerkleRoot(t *testing.T) {
 }
 
 func TestDuplicateLeaves(t *testing.T) {
-	var initialBlockHash Hash
 	trueProg := []byte{byte(vm.OP_TRUE)}
-	assetID := ComputeAssetID(trueProg, &initialBlockHash, 1, &EmptyStringHash)
+	assetID := ComputeAssetID(trueProg, 1, &EmptyStringHash)
 	txs := make([]*Tx, 6)
 	for i := uint64(0); i < 6; i++ {
 		now := []byte(time.Now().String())
-		txs[i] = legacy.NewTx(legacy.TxData{
+		txs[i] = types.NewTx(types.TxData{
 			Version: 1,
-			Inputs:  []*legacy.TxInput{legacy.NewIssuanceInput(now, i, nil, initialBlockHash, trueProg, nil, nil)},
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(assetID, i, trueProg, nil)},
+			Inputs:  []*types.TxInput{types.NewIssuanceInput(now, i, trueProg, nil, nil)},
+			Outputs: []*types.TxOutput{types.NewTxOutput(assetID, i, trueProg)},
 		}).Tx
 	}
 
 	// first, get the root of an unbalanced tree
 	txns := []*Tx{txs[5], txs[4], txs[3], txs[2], txs[1], txs[0]}
-	root1, err := MerkleRoot(txns)
+	root1, err := TxMerkleRoot(txns)
 	if err != nil {
 		t.Fatalf("unexpected error %s", err)
 	}
 
 	// now, get the root of a balanced tree that repeats leaves 0 and 1
 	txns = []*Tx{txs[5], txs[4], txs[3], txs[2], txs[1], txs[0], txs[1], txs[0]}
-	root2, err := MerkleRoot(txns)
+	root2, err := TxMerkleRoot(txns)
 	if err != nil {
 		t.Fatalf("unexpected error %s", err)
 	}
@@ -112,29 +112,28 @@ func TestDuplicateLeaves(t *testing.T) {
 }
 
 func TestAllDuplicateLeaves(t *testing.T) {
-	var initialBlockHash Hash
 	trueProg := []byte{byte(vm.OP_TRUE)}
-	assetID := ComputeAssetID(trueProg, &initialBlockHash, 1, &EmptyStringHash)
+	assetID := ComputeAssetID(trueProg, 1, &EmptyStringHash)
 	now := []byte(time.Now().String())
-	issuanceInp := legacy.NewIssuanceInput(now, 1, nil, initialBlockHash, trueProg, nil, nil)
+	issuanceInp := types.NewIssuanceInput(now, 1, trueProg, nil, nil)
 
-	tx := legacy.NewTx(legacy.TxData{
+	tx := types.NewTx(types.TxData{
 		Version: 1,
-		Inputs:  []*legacy.TxInput{issuanceInp},
-		Outputs: []*legacy.TxOutput{legacy.NewTxOutput(assetID, 1, trueProg, nil)},
+		Inputs:  []*types.TxInput{issuanceInp},
+		Outputs: []*types.TxOutput{types.NewTxOutput(assetID, 1, trueProg)},
 	}).Tx
 	tx1, tx2, tx3, tx4, tx5, tx6 := tx, tx, tx, tx, tx, tx
 
 	// first, get the root of an unbalanced tree
 	txs := []*Tx{tx6, tx5, tx4, tx3, tx2, tx1}
-	root1, err := MerkleRoot(txs)
+	root1, err := TxMerkleRoot(txs)
 	if err != nil {
 		t.Fatalf("unexpected error %s", err)
 	}
 
 	// now, get the root of a balanced tree that repeats leaves 5 and 6
 	txs = []*Tx{tx6, tx5, tx6, tx5, tx4, tx3, tx2, tx1}
-	root2, err := MerkleRoot(txs)
+	root2, err := TxMerkleRoot(txs)
 	if err != nil {
 		t.Fatalf("unexpected error %s", err)
 	}
@@ -142,12 +141,4 @@ func TestAllDuplicateLeaves(t *testing.T) {
 	if root1 == root2 {
 		t.Error("forged merkle tree with all duplicate leaves")
 	}
-}
-
-func mustDecodeHash(s string) (h Hash) {
-	err := h.UnmarshalText([]byte(s))
-	if err != nil {
-		panic(err)
-	}
-	return h
 }

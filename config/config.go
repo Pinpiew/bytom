@@ -1,7 +1,10 @@
 package config
 
 import (
+	"os"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -9,7 +12,6 @@ type Config struct {
 	// Top level options use an anonymous struct
 	BaseConfig `mapstructure:",squash"`
 	// Options for services
-	RPC    *RPCConfig     `mapstructure:"rpc"`
 	P2P    *P2PConfig     `mapstructure:"p2p"`
 	Wallet *WalletConfig  `mapstructure:"wallet"`
 	Auth   *RPCAuthConfig `mapstructure:"auth"`
@@ -20,7 +22,6 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		BaseConfig: DefaultBaseConfig(),
-		RPC:        DefaultRPCConfig(),
 		P2P:        DefaultP2PConfig(),
 		Wallet:     DefaultWalletConfig(),
 		Auth:       DefaultRPCAuthConfig(),
@@ -28,19 +29,9 @@ func DefaultConfig() *Config {
 	}
 }
 
-func TestConfig() *Config {
-	return &Config{
-		BaseConfig: TestBaseConfig(),
-		RPC:        TestRPCConfig(),
-		P2P:        TestP2PConfig(),
-		Wallet:     TestWalletConfig(),
-	}
-}
-
 // Set the RootDir for all Config structs
 func (cfg *Config) SetRoot(root string) *Config {
 	cfg.BaseConfig.RootDir = root
-	cfg.RPC.RootDir = root
 	cfg.P2P.RootDir = root
 	return cfg
 }
@@ -51,9 +42,6 @@ type BaseConfig struct {
 	// The root directory for all data.
 	// This should be set in viper so it can unmarshal into this struct
 	RootDir string `mapstructure:"home"`
-
-	// A JSON file containing the initial validator set and other meta data
-	Genesis string `mapstructure:"genesis_file"`
 
 	//The ID of the network to json
 	ChainID string `mapstructure:"chain_id"`
@@ -93,13 +81,17 @@ type BaseConfig struct {
 
 	ApiAddress string `mapstructure:"api_addr"`
 
+	VaultMode bool `mapstructure:"vault_mode"`
+
 	Time time.Time
+
+	// log file name
+	LogFile string `mapstructure:"log_file"`
 }
 
 // Default configurable base parameters.
 func DefaultBaseConfig() BaseConfig {
 	return BaseConfig{
-		Genesis:           "genesis.json",
 		Moniker:           "anonymous",
 		ProfListenAddress: "",
 		FastSync:          true,
@@ -113,18 +105,6 @@ func DefaultBaseConfig() BaseConfig {
 	}
 }
 
-func TestBaseConfig() BaseConfig {
-	conf := DefaultBaseConfig()
-	conf.ChainID = "bytom_test"
-	conf.FastSync = false
-	conf.DBBackend = "memdb"
-	return conf
-}
-
-func (b BaseConfig) GenesisFile() string {
-	return rootify(b.Genesis, b.RootDir)
-}
-
 func (b BaseConfig) DBDir() string {
 	return rootify(b.DBPath, b.RootDir)
 }
@@ -133,38 +113,6 @@ func (b BaseConfig) KeysDir() string {
 	return rootify(b.KeysPath, b.RootDir)
 }
 
-type RPCConfig struct {
-	RootDir string `mapstructure:"home"`
-
-	// TCP or UNIX socket address for the RPC server to listen on
-	ListenAddress string `mapstructure:"laddr"`
-
-	// TCP or UNIX socket address for the gRPC server to listen on
-	// NOTE: This server only supports /broadcast_tx_commit
-	GRPCListenAddress string `mapstructure:"grpc_laddr"`
-
-	// Activate unsafe RPC commands like /dial_seeds and /unsafe_flush_mempool
-	Unsafe bool `mapstructure:"unsafe"`
-}
-
-// Default configurable rpc parameters.
-func DefaultRPCConfig() *RPCConfig {
-	return &RPCConfig{
-		ListenAddress:     "tcp://0.0.0.0:9888",
-		GRPCListenAddress: "",
-		Unsafe:            false,
-	}
-}
-
-func TestRPCConfig() *RPCConfig {
-	conf := DefaultRPCConfig()
-	conf.ListenAddress = "tcp://0.0.0.0:36657"
-	conf.GRPCListenAddress = "tcp://0.0.0.0:36658"
-	conf.Unsafe = true
-	return conf
-}
-
-//-----------------------------------------------------------------------------
 // P2PConfig
 type P2PConfig struct {
 	RootDir          string `mapstructure:"home"`
@@ -189,14 +137,8 @@ func DefaultP2PConfig() *P2PConfig {
 		MaxNumPeers:      50,
 		HandshakeTimeout: 30,
 		DialTimeout:      3,
+		PexReactor:       true,
 	}
-}
-
-func TestP2PConfig() *P2PConfig {
-	conf := DefaultP2PConfig()
-	conf.ListenAddress = "tcp://0.0.0.0:36656"
-	conf.SkipUPNP = true
-	return conf
 }
 
 func (p *P2PConfig) AddrBookFile() string {
@@ -206,6 +148,7 @@ func (p *P2PConfig) AddrBookFile() string {
 //-----------------------------------------------------------------------------
 type WalletConfig struct {
 	Disable bool `mapstructure:"disable"`
+	Rescan  bool `mapstructure:"rescan"`
 }
 
 type RPCAuthConfig struct {
@@ -234,12 +177,8 @@ func DefaultWebConfig() *WebConfig {
 func DefaultWalletConfig() *WalletConfig {
 	return &WalletConfig{
 		Disable: false,
+		Rescan:  false,
 	}
-}
-
-func TestWalletConfig() *WalletConfig {
-	conf := DefaultWalletConfig()
-	return conf
 }
 
 //-----------------------------------------------------------------------------
@@ -251,4 +190,32 @@ func rootify(path, root string) string {
 		return path
 	}
 	return filepath.Join(root, path)
+}
+
+// DefaultDataDir is the default data directory to use for the databases and other
+// persistence requirements.
+func DefaultDataDir() string {
+	// Try to place the data folder in the user's home dir
+	home := homeDir()
+	if home == "" {
+		return "./.bytom"
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Bytom")
+	case "windows":
+		return filepath.Join(home, "AppData", "Roaming", "Bytom")
+	default:
+		return filepath.Join(home, ".bytom")
+	}
+}
+
+func homeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	if usr, err := user.Current(); err == nil {
+		return usr.HomeDir
+	}
+	return ""
 }

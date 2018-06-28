@@ -8,15 +8,17 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-
 	"golang.org/x/crypto/sha3"
 
+	"github.com/bytom/common"
+	"github.com/bytom/consensus"
+	"github.com/bytom/crypto"
 	"github.com/bytom/crypto/ed25519"
 	"github.com/bytom/crypto/ed25519/chainkd"
 	"github.com/bytom/encoding/json"
 	"github.com/bytom/errors"
 	"github.com/bytom/protocol/bc"
-	"github.com/bytom/protocol/bc/legacy"
+	"github.com/bytom/protocol/bc/types"
 	"github.com/bytom/protocol/vm"
 	"github.com/bytom/protocol/vm/vmutil"
 	"github.com/bytom/testutil"
@@ -25,14 +27,14 @@ import (
 type testAction bc.AssetAmount
 
 func (t testAction) Build(ctx context.Context, b *TemplateBuilder) error {
-	in := legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), *t.AssetId, t.Amount, 0, nil, bc.Hash{}, nil)
+	in := types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), *t.AssetId, t.Amount, 0, nil)
 	tplIn := &SigningInstruction{}
 
 	err := b.AddInput(in, tplIn)
 	if err != nil {
 		return err
 	}
-	return b.AddOutput(legacy.NewTxOutput(*t.AssetId, t.Amount, []byte("change"), nil))
+	return b.AddOutput(types.NewTxOutput(*t.AssetId, t.Amount, []byte("change")))
 }
 
 func newControlProgramAction(assetAmt bc.AssetAmount, script []byte) *controlProgramAction {
@@ -51,25 +53,23 @@ func TestBuild(t *testing.T) {
 	actions := []Action{
 		newControlProgramAction(bc.AssetAmount{AssetId: &assetID2, Amount: 6}, []byte("dest")),
 		testAction(bc.AssetAmount{AssetId: &assetID1, Amount: 5}),
-		&setTxRefDataAction{Data: []byte("xyz")},
 	}
 	expiryTime := time.Now().Add(time.Minute)
-	got, err := Build(ctx, nil, actions, expiryTime)
+	got, err := Build(ctx, nil, actions, expiryTime, 0)
 	if err != nil {
 		testutil.FatalErr(t, err)
 	}
 
 	want := &Template{
-		Transaction: legacy.NewTx(legacy.TxData{
+		Transaction: types.NewTx(types.TxData{
 			Version: 1,
-			Inputs: []*legacy.TxInput{
-				legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), assetID1, 5, 0, nil, bc.Hash{}, nil),
+			Inputs: []*types.TxInput{
+				types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), assetID1, 5, 0, nil),
 			},
-			Outputs: []*legacy.TxOutput{
-				legacy.NewTxOutput(assetID2, 6, []byte("dest"), nil),
-				legacy.NewTxOutput(assetID1, 5, []byte("change"), nil),
+			Outputs: []*types.TxOutput{
+				types.NewTxOutput(assetID2, 6, []byte("dest")),
+				types.NewTxOutput(assetID1, 5, []byte("change")),
 			},
-			ReferenceData: []byte("xyz"),
 		}),
 		SigningInstructions: []*SigningInstruction{{
 			WitnessComponents: []witnessComponent{},
@@ -83,24 +83,9 @@ func TestBuild(t *testing.T) {
 	if !testutil.DeepEqual(got.SigningInstructions, want.SigningInstructions) {
 		t.Errorf("got signing instructions:\n\t%#v\nwant signing instructions:\n\t%#v", got.SigningInstructions, want.SigningInstructions)
 	}
-
-	// setting tx refdata twice should fail
-	actions = append(actions, &setTxRefDataAction{Data: []byte("lmnop")})
-	_, err = Build(ctx, nil, actions, expiryTime)
-	if errors.Root(err) != ErrAction {
-		t.Errorf("got error %#v, want ErrAction", err)
-	}
-	errs := errors.Data(err)["actions"].([]error)
-	if len(errs) != 1 {
-		t.Errorf("got error %v action errors, want 1", len(errs))
-	}
-	if errors.Root(errs[0]) != ErrBadRefData {
-		t.Errorf("got error %v in action error, want ErrBadRefData", errs[0])
-	}
 }
 
 func TestSignatureWitnessMaterialize(t *testing.T) {
-	var initialBlockHash bc.Hash
 	privkey1, pubkey1, err := chainkd.NewXKeys(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -114,15 +99,15 @@ func TestSignatureWitnessMaterialize(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuanceProg, _ := vmutil.P2SPMultiSigProgram([]ed25519.PublicKey{pubkey1.PublicKey(), pubkey2.PublicKey(), pubkey3.PublicKey()}, 2)
-	assetID := bc.ComputeAssetID(issuanceProg, &initialBlockHash, 1, &bc.EmptyStringHash)
+	assetID := bc.ComputeAssetID(issuanceProg, 1, &bc.EmptyStringHash)
 	outscript := mustDecodeHex("76a914c5d128911c28776f56baaac550963f7b88501dc388c0")
-	unsigned := legacy.NewTx(legacy.TxData{
+	unsigned := types.NewTx(types.TxData{
 		Version: 1,
-		Inputs: []*legacy.TxInput{
-			legacy.NewIssuanceInput([]byte{1}, 100, nil, initialBlockHash, issuanceProg, nil, nil),
+		Inputs: []*types.TxInput{
+			types.NewIssuanceInput([]byte{1}, 100, issuanceProg, nil, nil),
 		},
-		Outputs: []*legacy.TxOutput{
-			legacy.NewTxOutput(assetID, 100, outscript, nil),
+		Outputs: []*types.TxOutput{
+			types.NewTxOutput(assetID, 100, outscript),
 		},
 	})
 
@@ -201,60 +186,60 @@ func mustDecodeHex(str string) []byte {
 
 func TestCheckBlankCheck(t *testing.T) {
 	cases := []struct {
-		tx   *legacy.TxData
+		tx   *types.TxData
 		want error
 	}{{
-		tx: &legacy.TxData{
-			Inputs: []*legacy.TxInput{legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil)},
+		tx: &types.TxData{
+			Inputs: []*types.TxInput{types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil)},
 		},
 		want: ErrBlankCheck,
 	}, {
-		tx: &legacy.TxData{
-			Inputs:  []*legacy.TxInput{legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil)},
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(bc.AssetID{}, 3, nil, nil)},
+		tx: &types.TxData{
+			Inputs:  []*types.TxInput{types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil)},
+			Outputs: []*types.TxOutput{types.NewTxOutput(bc.AssetID{}, 3, nil)},
 		},
 		want: ErrBlankCheck,
 	}, {
-		tx: &legacy.TxData{
-			Inputs: []*legacy.TxInput{
-				legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil),
-				legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.NewAssetID([32]byte{1}), 5, 0, nil, bc.Hash{}, nil),
+		tx: &types.TxData{
+			Inputs: []*types.TxInput{
+				types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil),
+				types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.NewAssetID([32]byte{1}), 5, 0, nil),
 			},
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(bc.AssetID{}, 5, nil, nil)},
+			Outputs: []*types.TxOutput{types.NewTxOutput(bc.AssetID{}, 5, nil)},
 		},
 		want: ErrBlankCheck,
 	}, {
-		tx: &legacy.TxData{
-			Inputs: []*legacy.TxInput{legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil)},
-			Outputs: []*legacy.TxOutput{
-				legacy.NewTxOutput(bc.AssetID{}, math.MaxInt64, nil, nil),
-				legacy.NewTxOutput(bc.AssetID{}, 7, nil, nil),
-			},
-		},
-		want: ErrBadAmount,
-	}, {
-		tx: &legacy.TxData{
-			Inputs: []*legacy.TxInput{
-				legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil),
-				legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, math.MaxInt64, 0, nil, bc.Hash{}, nil),
+		tx: &types.TxData{
+			Inputs: []*types.TxInput{types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil)},
+			Outputs: []*types.TxOutput{
+				types.NewTxOutput(bc.AssetID{}, math.MaxInt64, nil),
+				types.NewTxOutput(bc.AssetID{}, 7, nil),
 			},
 		},
 		want: ErrBadAmount,
 	}, {
-		tx: &legacy.TxData{
-			Inputs:  []*legacy.TxInput{legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil)},
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(bc.AssetID{}, 5, nil, nil)},
+		tx: &types.TxData{
+			Inputs: []*types.TxInput{
+				types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil),
+				types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, math.MaxInt64, 0, nil),
+			},
+		},
+		want: ErrBadAmount,
+	}, {
+		tx: &types.TxData{
+			Inputs:  []*types.TxInput{types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil)},
+			Outputs: []*types.TxOutput{types.NewTxOutput(bc.AssetID{}, 5, nil)},
 		},
 		want: nil,
 	}, {
-		tx: &legacy.TxData{
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(bc.AssetID{}, 5, nil, nil)},
+		tx: &types.TxData{
+			Outputs: []*types.TxOutput{types.NewTxOutput(bc.AssetID{}, 5, nil)},
 		},
 		want: nil,
 	}, {
-		tx: &legacy.TxData{
-			Inputs:  []*legacy.TxInput{legacy.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil, bc.Hash{}, nil)},
-			Outputs: []*legacy.TxOutput{legacy.NewTxOutput(bc.NewAssetID([32]byte{1}), 5, nil, nil)},
+		tx: &types.TxData{
+			Inputs:  []*types.TxInput{types.NewSpendInput(nil, bc.NewHash([32]byte{0xff}), bc.AssetID{}, 5, 0, nil)},
+			Outputs: []*types.TxOutput{types.NewTxOutput(bc.NewAssetID([32]byte{1}), 5, nil)},
 		},
 		want: nil,
 	}}
@@ -264,5 +249,80 @@ func TestCheckBlankCheck(t *testing.T) {
 		if errors.Root(got) != c.want {
 			t.Errorf("checkUnsafe(%+v) err = %v want %v", c.tx, errors.Root(got), c.want)
 		}
+	}
+}
+
+func TestCreateTxByUtxo(t *testing.T) {
+	xprv, xpub, err := chainkd.NewXKeys(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub := xpub.PublicKey()
+	pubHash := crypto.Ripemd160(pub)
+	program, err := vmutil.P2WPKHProgram([]byte(pubHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address, err := common.NewAddressWitnessPubKeyHash(pubHash, &consensus.ActiveNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	muxID := testutil.MustDecodeHash("1e673900965623ec3305cead5a78dfb68a34599f8bc078460f3f202256c3dfa6")
+	utxo := struct {
+		SourceID       bc.Hash
+		AssetID        bc.AssetID
+		Amount         uint64
+		SourcePos      uint64
+		ControlProgram []byte
+		Address        string
+	}{
+		SourceID:       muxID,
+		AssetID:        *consensus.BTMAssetID,
+		Amount:         20000000000,
+		SourcePos:      1,
+		ControlProgram: program,
+		Address:        address.EncodeAddress(),
+	}
+
+	recvProg := mustDecodeHex("00145056532ecd3621c9ce8adde5505c058610b287cf")
+	tx := types.NewTx(types.TxData{
+		Version: 1,
+		Inputs: []*types.TxInput{
+			types.NewSpendInput(nil, utxo.SourceID, utxo.AssetID, utxo.Amount, utxo.SourcePos, utxo.ControlProgram),
+		},
+		Outputs: []*types.TxOutput{
+			types.NewTxOutput(*consensus.BTMAssetID, 10000000000, recvProg),
+		},
+	})
+
+	tpl := &Template{
+		Transaction:     tx,
+		AllowAdditional: false,
+	}
+
+	h := tpl.Hash(0).Byte32()
+	sig := xprv.Sign(h[:])
+	data := []byte(pub)
+
+	// Test with more signatures than required, in correct order
+	tpl.SigningInstructions = []*SigningInstruction{{
+		WitnessComponents: []witnessComponent{
+			&RawTxSigWitness{
+				Quorum: 1,
+				Sigs:   []json.HexBytes{sig},
+			},
+			DataWitness(data),
+		},
+	}}
+
+	if err = materializeWitnesses(tpl); err != nil {
+		t.Fatal(err)
+	}
+
+	if !testutil.DeepEqual(tx, tpl.Transaction) {
+		t.Errorf("tx:%v result is equal to want:%v", tx, tpl.Transaction)
 	}
 }

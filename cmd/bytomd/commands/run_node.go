@@ -2,14 +2,11 @@ package commands
 
 import (
 	"fmt"
-	"io/ioutil"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	cmn "github.com/tendermint/tmlibs/common"
 
 	"github.com/bytom/node"
-	"github.com/bytom/types"
 )
 
 var runNodeCmd = &cobra.Command{
@@ -25,8 +22,10 @@ func init() {
 	runNodeCmd.Flags().Bool("auth.disable", config.Auth.Disable, "Disable rpc access authenticate")
 
 	runNodeCmd.Flags().Bool("wallet.disable", config.Wallet.Disable, "Disable wallet")
-
+	runNodeCmd.Flags().Bool("wallet.rescan", config.Wallet.Rescan, "Rescan wallet")
+	runNodeCmd.Flags().Bool("vault_mode", config.VaultMode, "Run in the offline enviroment")
 	runNodeCmd.Flags().Bool("web.closed", config.Web.Closed, "Lanch web browser or not")
+	runNodeCmd.Flags().String("chain_id", config.ChainID, "Select network type")
 
 	// p2p flags
 	runNodeCmd.Flags().String("p2p.laddr", config.P2P.ListenAddress, "Node listen address. (0.0.0.0:0 means any interface, any port)")
@@ -37,37 +36,19 @@ func init() {
 	runNodeCmd.Flags().Int("p2p.handshake_timeout", config.P2P.HandshakeTimeout, "Set handshake timeout")
 	runNodeCmd.Flags().Int("p2p.dial_timeout", config.P2P.DialTimeout, "Set dial timeout")
 
+	// log flags
+	runNodeCmd.Flags().String("log_file", config.LogFile, "Log output file")
+
 	RootCmd.AddCommand(runNodeCmd)
 }
 
 func runNode(cmd *cobra.Command, args []string) error {
-	genDocFile := config.GenesisFile()
-	if cmn.FileExists(genDocFile) {
-		jsonBlob, err := ioutil.ReadFile(genDocFile)
-		if err != nil {
-			return fmt.Errorf("Couldn't read GenesisDoc file: %v ", err)
-		}
-		genDoc, err := types.GenesisDocFromJSON(jsonBlob)
-		if err != nil {
-			return fmt.Errorf("Error reading GenesisDoc: %v ", err)
-		}
-		if genDoc.ChainID == "" {
-			return fmt.Errorf("Genesis doc %v must include non-empty chain_id ", genDocFile)
-		}
-
-		config.ChainID = genDoc.ChainID
-		config.PrivateKey = genDoc.PrivateKey
-		config.Time = genDoc.GenesisTime
-	} else {
-		return fmt.Errorf("not find genesis.json")
-	}
-
 	// Create & start node
-	n := node.NewNodeDefault(config)
+	n := node.NewNode(config)
 	if _, err := n.Start(); err != nil {
 		return fmt.Errorf("Failed to start node: %v", err)
 	} else {
-		log.WithField("nodeInfo", n.Switch().NodeInfo()).Info("Started node")
+		log.Info("Start node ", n.SyncManager().NodeInfo())
 	}
 
 	// Trap signal, run forever.

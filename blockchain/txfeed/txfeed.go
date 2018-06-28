@@ -13,7 +13,7 @@ import (
 	"github.com/bytom/errors"
 	"github.com/bytom/protocol"
 	"github.com/bytom/protocol/bc"
-	"github.com/bytom/protocol/bc/legacy"
+	"github.com/bytom/protocol/bc/types"
 	"github.com/bytom/protocol/vm/vmutil"
 )
 
@@ -37,7 +37,7 @@ type Tracker struct {
 	DB       dbm.DB
 	TxFeeds  []*TxFeed
 	chain    *protocol.Chain
-	txfeedCh chan *legacy.Tx
+	txfeedCh chan *types.Tx
 }
 
 type rawOutput struct {
@@ -60,10 +60,10 @@ type TxFeed struct {
 }
 
 type filter struct {
-	assetID          string `json:"assetid,omitempty"`
-	amountLowerLimit uint64 `json:"lowerlimit,omitempty"`
-	amountUpperLimit uint64 `json:"upperlimit,omitempty"`
-	transType        string `json:"transtype,omitempty"`
+	AssetID          string `json:"assetid,omitempty"`
+	AmountLowerLimit uint64 `json:"lowerlimit,omitempty"`
+	AmountUpperLimit uint64 `json:"upperlimit,omitempty"`
+	TransType        string `json:"transtype,omitempty"`
 }
 
 //NewTracker create new txfeed tracker.
@@ -72,7 +72,7 @@ func NewTracker(db dbm.DB, chain *protocol.Chain) *Tracker {
 		DB:       db,
 		TxFeeds:  make([]*TxFeed, 0, 10),
 		chain:    chain,
-		txfeedCh: make(chan *legacy.Tx, maxNewTxfeedChSize),
+		txfeedCh: make(chan *types.Tx, maxNewTxfeedChSize),
 	}
 
 	return s
@@ -107,18 +107,18 @@ func parseFilter(ft string) (filter, error) {
 			continue
 		}
 		if strings.Contains(value, "asset_id") {
-			res.assetID = param
+			res.AssetID = param
 		}
 		if strings.Contains(value, "amount_lower_limit") {
 			tmp, _ := strconv.ParseInt(param, 10, 64)
-			res.amountLowerLimit = uint64(tmp)
+			res.AmountLowerLimit = uint64(tmp)
 		}
 		if strings.Contains(value, "amount_upper_limit") {
 			tmp, _ := strconv.ParseInt(param, 10, 64)
-			res.amountUpperLimit = uint64(tmp)
+			res.AmountUpperLimit = uint64(tmp)
 		}
 		if strings.Contains(value, "trans_type") {
-			res.transType = param
+			res.TransType = param
 		}
 	}
 	return res, nil
@@ -154,18 +154,18 @@ func parseTxfeed(db dbm.DB, filters []filter) error {
 				continue
 			}
 			if strings.Contains(value, "asset_id") {
-				filters[index].assetID = param
+				filters[index].AssetID = param
 			}
 			if strings.Contains(value, "amount_lower_limit") {
 				tmp, _ := strconv.ParseInt(param, 10, 64)
-				filters[index].amountLowerLimit = uint64(tmp)
+				filters[index].AmountLowerLimit = uint64(tmp)
 			}
 			if strings.Contains(value, "amount_upper_limit") {
 				tmp, _ := strconv.ParseInt(param, 10, 64)
-				filters[index].amountUpperLimit = uint64(tmp)
+				filters[index].AmountUpperLimit = uint64(tmp)
 			}
 			if strings.Contains(value, "trans_type") {
-				filters[index].transType = param
+				filters[index].TransType = param
 			}
 		}
 		index++
@@ -181,7 +181,7 @@ func (t *Tracker) Prepare(ctx context.Context) error {
 }
 
 //GetTxfeedCh return a txfeed channel.
-func (t *Tracker) GetTxfeedCh() chan *legacy.Tx {
+func (t *Tracker) GetTxfeedCh() chan *types.Tx {
 	return t.txfeedCh
 }
 
@@ -282,16 +282,16 @@ func (t *Tracker) Delete(ctx context.Context, alias string) error {
 func outputFilter(txfeed *TxFeed, value *query.AnnotatedOutput) bool {
 	assetidstr := value.AssetID.String()
 
-	if 0 != strings.Compare(txfeed.Param.assetID, assetidstr) && txfeed.Param.assetID != "" {
+	if txfeed.Param.AssetID != assetidstr && txfeed.Param.AssetID != "" {
 		return false
 	}
-	if 0 != strings.Compare(txfeed.Param.transType, value.Type) && txfeed.Param.transType != "" {
+	if txfeed.Param.TransType != value.Type && txfeed.Param.TransType != "" {
 		return false
 	}
-	if txfeed.Param.amountLowerLimit > value.Amount && txfeed.Param.amountLowerLimit != 0 {
+	if txfeed.Param.AmountLowerLimit > value.Amount && txfeed.Param.AmountLowerLimit != 0 {
 		return false
 	}
-	if txfeed.Param.amountUpperLimit < value.Amount && txfeed.Param.amountUpperLimit != 0 {
+	if txfeed.Param.AmountUpperLimit < value.Amount && txfeed.Param.AmountUpperLimit != 0 {
 		return false
 	}
 
@@ -299,7 +299,7 @@ func outputFilter(txfeed *TxFeed, value *query.AnnotatedOutput) bool {
 }
 
 //TxFilter filter tx from mempool.
-func (t *Tracker) TxFilter(tx *legacy.Tx) error {
+func (t *Tracker) TxFilter(tx *types.Tx) error {
 	var annotatedTx *query.AnnotatedTx
 	// Build the fully annotated transaction.
 	annotatedTx = buildAnnotatedTransaction(tx)
@@ -321,7 +321,7 @@ func (t *Tracker) TxFilter(tx *legacy.Tx) error {
 
 var emptyJSONObject = json.RawMessage(`{}`)
 
-func buildAnnotatedTransaction(orig *legacy.Tx) *query.AnnotatedTx {
+func buildAnnotatedTransaction(orig *types.Tx) *query.AnnotatedTx {
 	tx := &query.AnnotatedTx{
 		ID:      orig.ID,
 		Inputs:  make([]*query.AnnotatedInput, 0, len(orig.Inputs)),
@@ -337,13 +337,12 @@ func buildAnnotatedTransaction(orig *legacy.Tx) *query.AnnotatedTx {
 	return tx
 }
 
-func buildAnnotatedInput(tx *legacy.Tx, i uint32) *query.AnnotatedInput {
+func buildAnnotatedInput(tx *types.Tx, i uint32) *query.AnnotatedInput {
 	orig := tx.Inputs[i]
 	in := &query.AnnotatedInput{
 		AssetID:         orig.AssetID(),
 		Amount:          orig.Amount(),
 		AssetDefinition: &emptyJSONObject,
-		ReferenceData:   &emptyJSONObject,
 	}
 
 	id := tx.Tx.InputIDs[i]
@@ -361,7 +360,7 @@ func buildAnnotatedInput(tx *legacy.Tx, i uint32) *query.AnnotatedInput {
 	return in
 }
 
-func buildAnnotatedOutput(tx *legacy.Tx, idx int) *query.AnnotatedOutput {
+func buildAnnotatedOutput(tx *types.Tx, idx int) *query.AnnotatedOutput {
 	orig := tx.Outputs[idx]
 	outid := tx.OutputID(idx)
 	out := &query.AnnotatedOutput{
@@ -371,7 +370,6 @@ func buildAnnotatedOutput(tx *legacy.Tx, idx int) *query.AnnotatedOutput {
 		AssetDefinition: &emptyJSONObject,
 		Amount:          orig.Amount,
 		ControlProgram:  orig.ControlProgram,
-		ReferenceData:   &emptyJSONObject,
 	}
 
 	if vmutil.IsUnspendable(out.ControlProgram) {

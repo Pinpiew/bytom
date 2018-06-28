@@ -10,6 +10,7 @@ import (
 	"github.com/tendermint/tmlibs/cli"
 
 	"github.com/bytom/cmd/bytomd/commands"
+	"github.com/bytom/config"
 )
 
 // ContextHook is a hook for logrus.
@@ -40,7 +41,7 @@ func (hook ContextHook) Fire(entry *log.Entry) error {
 }
 
 func init() {
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
+	log.SetFormatter(&log.TextFormatter{FullTimestamp: true, DisableColors: true})
 
 	// If environment variable BYTOM_DEBUG is not empty,
 	// then add the hook to logrus and set the log level to DEBUG
@@ -51,6 +52,6 @@ func init() {
 }
 
 func main() {
-	cmd := cli.PrepareBaseCmd(commands.RootCmd, "TM", os.ExpandEnv("./.bytomd"))
+	cmd := cli.PrepareBaseCmd(commands.RootCmd, "TM", os.ExpandEnv(config.DefaultDataDir()))
 	cmd.Execute()
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/bytom/crypto/ed25519/chainkd"
+	log "github.com/sirupsen/logrus"
+
 	chainjson "github.com/bytom/encoding/json"
-	"github.com/bytom/errors"
 )
 
 // TODO(bobg): most of the code here is duplicated from
@@ -20,7 +20,7 @@ type RawTxSigWitness struct {
 	Sigs   []chainjson.HexBytes `json:"signatures"`
 }
 
-func (sw *RawTxSigWitness) sign(ctx context.Context, tpl *Template, index uint32, xpubs []chainkd.XPub, auth []string, signFn SignFunc) error {
+func (sw *RawTxSigWitness) sign(ctx context.Context, tpl *Template, index uint32, auth string, signFn SignFunc) error {
 	if len(sw.Sigs) < len(sw.Keys) {
 		// Each key in sw.Keys may produce a signature in sw.Sigs. Make
 		// sure there are enough slots in sw.Sigs and that we preserve any
@@ -34,23 +34,14 @@ func (sw *RawTxSigWitness) sign(ctx context.Context, tpl *Template, index uint32
 			// Already have a signature for this key
 			continue
 		}
-		var found bool
-		for _, xpub := range xpubs {
-			if keyID.XPub == xpub {
-				found = true
-				break
-			}
-		}
-		if xpubs != nil && !found {
-			continue
-		}
-		path := make([]([]byte), len(keyID.DerivationPath))
+		path := make([][]byte, len(keyID.DerivationPath))
 		for i, p := range keyID.DerivationPath {
 			path[i] = p
 		}
-		sigBytes, err := signFn(ctx, keyID.XPub, path, tpl.Hash(index).Byte32(), auth[i])
+		sigBytes, err := signFn(ctx, keyID.XPub, path, tpl.Hash(index).Byte32(), auth)
 		if err != nil {
-			return errors.WithDetailf(err, "computing signature %d", i)
+			log.WithField("err", err).Warningf("computing signature %d", i)
+			continue
 		}
 		sw.Sigs[i] = sigBytes
 	}
@@ -68,6 +59,7 @@ func (sw RawTxSigWitness) materialize(args *[][]byte) error {
 	return nil
 }
 
+// MarshalJSON convert struct to json
 func (sw RawTxSigWitness) MarshalJSON() ([]byte, error) {
 	obj := struct {
 		Type   string               `json:"type"`

@@ -2,8 +2,6 @@ package commands
 
 import (
 	"os"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	jww "github.com/spf13/jwalterweatherman"
@@ -15,22 +13,21 @@ import (
 func init() {
 	createAccountCmd.PersistentFlags().IntVarP(&accountQuorum, "quorom", "q", 1, "quorum must be greater than 0 and less than or equal to the number of signers")
 	createAccountCmd.PersistentFlags().StringVarP(&accountToken, "access", "a", "", "access token")
-	createAccountCmd.PersistentFlags().StringVarP(&accountTags, "tags", "t", "", "tags")
-
-	updateAccountTagsCmd.PersistentFlags().StringVarP(&accountUpdateTags, "tags", "t", "", "tags to add, delete or update")
 
 	listAccountsCmd.PersistentFlags().StringVar(&accountID, "id", "", "ID of account")
+
+	listAddressesCmd.PersistentFlags().StringVar(&accountID, "id", "", "account ID")
+	listAddressesCmd.PersistentFlags().StringVar(&accountAlias, "alias", "", "account alias")
 
 	listUnspentOutputsCmd.PersistentFlags().StringVar(&outputID, "id", "", "ID of unspent output")
 }
 
 var (
-	accountID         = ""
-	accountQuorum     = 1
-	accountToken      = ""
-	accountTags       = ""
-	accountUpdateTags = ""
-	outputID          = ""
+	accountID     = ""
+	accountAlias  = ""
+	accountQuorum = 1
+	accountToken  = ""
+	outputID      = ""
 )
 
 var createAccountCmd = &cobra.Command{
@@ -51,15 +48,6 @@ var createAccountCmd = &cobra.Command{
 
 		ins.Quorum = accountQuorum
 		ins.Alias = args[0]
-		if len(accountTags) != 0 {
-			tags := strings.Split(accountTags, ":")
-			if len(tags) != 2 {
-				jww.ERROR.Println("Invalid tags")
-				os.Exit(util.ErrLocalExe)
-			}
-			ins.Tags = map[string]interface{}{tags[0]: tags[1]}
-		}
-
 		ins.AccessToken = accountToken
 
 		data, exitCode := util.ClientCall("/create-account", &ins)
@@ -106,49 +94,58 @@ var deleteAccountCmd = &cobra.Command{
 	},
 }
 
-var updateAccountTagsCmd = &cobra.Command{
-	Use:   "update-account-tags <accountID|alias>",
-	Short: "Update the account tags",
-	Args:  cobra.ExactArgs(1),
-	PreRun: func(cmd *cobra.Command, args []string) {
-		cmd.MarkFlagRequired("tags")
-	},
+var createAccountReceiverCmd = &cobra.Command{
+	Use:   "create-account-receiver <accountAlias> [accountID]",
+	Short: "Create an account receiver",
+	Args:  cobra.RangeArgs(1, 2),
 	Run: func(cmd *cobra.Command, args []string) {
-		var updateTag = struct {
-			AccountInfo string                 `json:"account_info"`
-			Tags        map[string]interface{} `json:"tags"`
-		}{}
+		var ins = struct {
+			AccountID    string `json:"account_id"`
+			AccountAlias string `json:"account_alias"`
+		}{AccountAlias: args[0]}
 
-		if len(accountUpdateTags) != 0 {
-			tags := strings.Split(accountUpdateTags, ":")
-			if len(tags) != 2 {
-				jww.ERROR.Println("Invalid tags")
-				os.Exit(util.ErrLocalExe)
-			}
-			updateTag.Tags = map[string]interface{}{tags[0]: tags[1]}
+		if len(args) == 2 {
+			ins.AccountID = args[1]
 		}
 
-		updateTag.AccountInfo = args[0]
-
-		if _, exitCode := util.ClientCall("/update-account-tags", &updateTag); exitCode != util.Success {
+		data, exitCode := util.ClientCall("/create-account-receiver", &ins)
+		if exitCode != util.Success {
 			os.Exit(exitCode)
 		}
 
-		jww.FEEDBACK.Println("Successfully update account tags")
+		printJSON(data)
 	},
 }
 
-var createAccountAddressCmd = &cobra.Command{
-	Use:   "create-account-address <accountID | alias>",
-	Short: "Create an account address",
+var listAddressesCmd = &cobra.Command{
+	Use:   "list-addresses",
+	Short: "List the account addresses",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		var ins = struct {
+			AccountID    string `json:"account_id"`
+			AccountAlias string `json:"account_alias"`
+		}{AccountID: accountID, AccountAlias: accountAlias}
+
+		data, exitCode := util.ClientCall("/list-addresses", &ins)
+		if exitCode != util.Success {
+			os.Exit(exitCode)
+		}
+
+		printJSONList(data)
+	},
+}
+
+var validateAddressCmd = &cobra.Command{
+	Use:   "validate-address <address>",
+	Short: "validate the account addresses",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		var ins = struct {
-			AccountInfo string    `json:"account_info"`
-			ExpiresAt   time.Time `json:"expires_at,omitempty"`
-		}{AccountInfo: args[0]}
+			Address string `json:"address"`
+		}{Address: args[0]}
 
-		data, exitCode := util.ClientCall("/create-account-address", &ins)
+		data, exitCode := util.ClientCall("/validate-address", &ins)
 		if exitCode != util.Success {
 			os.Exit(exitCode)
 		}

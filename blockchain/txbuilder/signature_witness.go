@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/bytom/crypto/ed25519/chainkd"
 	"github.com/bytom/crypto/sha3pool"
 	chainjson "github.com/bytom/encoding/json"
@@ -12,6 +14,7 @@ import (
 )
 
 type (
+	// SignatureWitness is a sign struct
 	SignatureWitness struct {
 		// Quorum is the number of signatures required.
 		Quorum int `json:"quorum"`
@@ -35,19 +38,19 @@ type (
 	}
 )
 
+// ErrEmptyProgram is a type of error
 var ErrEmptyProgram = errors.New("empty signature program")
 
 // Sign populates sw.Sigs with as many signatures of the predicate in
-// sw.Program as it can from the overlapping set of keys in sw.Keys
-// and xpubs.
+// sw.Program as it can from the overlapping set of keys in sw.Keys.
 //
 // If sw.Program is empty, it is populated with an _inferred_ predicate:
 // a program committing to aspects of the current
 // transaction. Specifically, the program commits to:
 //  - the mintime and maxtime of the transaction (if non-zero)
-//  - the outputID and (if non-empty) reference data of the current input
-//  - the assetID, amount, control program, and (if non-empty) reference data of each output.
-func (sw *SignatureWitness) sign(ctx context.Context, tpl *Template, index uint32, xpubs []chainkd.XPub, auth []string, signFn SignFunc) error {
+//  - the outputID of the current input
+//  - the assetID, amount, control program of each output.
+func (sw *SignatureWitness) sign(ctx context.Context, tpl *Template, index uint32, auth string, signFn SignFunc) error {
 	// Compute the predicate to sign. This is either a
 	// txsighash program if tpl.AllowAdditional is false (i.e., the tx is complete
 	// and no further changes are allowed) or a program enforcing
@@ -77,23 +80,14 @@ func (sw *SignatureWitness) sign(ctx context.Context, tpl *Template, index uint3
 			// Already have a signature for this key
 			continue
 		}
-		var found bool
-		for _, xpub := range xpubs {
-			if keyID.XPub == xpub {
-				found = true
-				break
-			}
-		}
-		if xpubs != nil && !found {
-			continue
-		}
-		path := make([]([]byte), len(keyID.DerivationPath))
+		path := make([][]byte, len(keyID.DerivationPath))
 		for i, p := range keyID.DerivationPath {
 			path[i] = p
 		}
-		sigBytes, err := signFn(ctx, keyID.XPub, path, h, auth[i])
+		sigBytes, err := signFn(ctx, keyID.XPub, path, h, auth)
 		if err != nil {
-			return errors.WithDetailf(err, "computing signature %d", i)
+			log.WithField("err", err).Warningf("computing signature %d", i)
+			continue
 		}
 		sw.Sigs[i] = sigBytes
 	}
@@ -118,6 +112,7 @@ func (sw SignatureWitness) materialize(args *[][]byte) error {
 	return nil
 }
 
+// MarshalJSON convert struct to json
 func (sw SignatureWitness) MarshalJSON() ([]byte, error) {
 	obj := struct {
 		Type   string               `json:"type"`

@@ -5,7 +5,7 @@ import (
 
 	"github.com/bytom/errors"
 	"github.com/bytom/protocol/bc"
-	"github.com/bytom/protocol/bc/legacy"
+	"github.com/bytom/protocol/bc/types"
 	"github.com/bytom/protocol/state"
 	"github.com/bytom/protocol/validation"
 )
@@ -13,7 +13,6 @@ import (
 var (
 	// ErrBadBlock is returned when a block is invalid.
 	ErrBadBlock = errors.New("invalid block")
-
 	// ErrBadStateRoot is returned when the computed assets merkle root
 	// disagrees with the one declared in a block header.
 	ErrBadStateRoot = errors.New("invalid state merkle root")
@@ -21,57 +20,57 @@ var (
 
 // BlockExist check is a block in chain or orphan
 func (c *Chain) BlockExist(hash *bc.Hash) bool {
-	return c.orphanManage.BlockExist(hash) || c.store.BlockExist(hash)
+	return c.index.BlockExist(hash) || c.orphanManage.BlockExist(hash)
 }
 
 // GetBlockByHash return a block by given hash
-func (c *Chain) GetBlockByHash(hash *bc.Hash) (*legacy.Block, error) {
+func (c *Chain) GetBlockByHash(hash *bc.Hash) (*types.Block, error) {
 	return c.store.GetBlock(hash)
 }
 
 // GetBlockByHeight return a block by given height
-func (c *Chain) GetBlockByHeight(height uint64) (*legacy.Block, error) {
-	c.state.cond.L.Lock()
-	hash, ok := c.state.mainChain[height]
-	c.state.cond.L.Unlock()
-	if !ok {
-		return nil, errors.New("can't find block in given hight")
+func (c *Chain) GetBlockByHeight(height uint64) (*types.Block, error) {
+	node := c.index.NodeByHeight(height)
+	if node == nil {
+		return nil, errors.New("can't find block in given height")
 	}
-	return c.GetBlockByHash(hash)
+	return c.store.GetBlock(&node.Hash)
 }
 
-// ValidateBlock validates an incoming block in advance of applying it
-// to a snapshot (with ApplyValidBlock) and committing it to the
-// blockchain (with CommitAppliedBlock).
-func (c *Chain) ValidateBlock(block, prev *legacy.Block) error {
-	blockEnts := legacy.MapBlock(block)
-	prevEnts := legacy.MapBlock(prev)
-	if err := validation.ValidateBlock(blockEnts, prevEnts); err != nil {
-		return errors.Sub(ErrBadBlock, err)
+func (c *Chain) calcReorganizeNodes(node *state.BlockNode) ([]*state.BlockNode, []*state.BlockNode) {
+	var attachNodes []*state.BlockNode
+	var detachNodes []*state.BlockNode
+
+	attachNode := node
+	for c.index.NodeByHeight(attachNode.Height) != attachNode {
+		attachNodes = append([]*state.BlockNode{attachNode}, attachNodes...)
+		attachNode = attachNode.Parent
 	}
-	return nil
+
+	detachNode := c.bestNode
+	for detachNode != attachNode {
+		detachNodes = append(detachNodes, detachNode)
+		detachNode = detachNode.Parent
+	}
+	return attachNodes, detachNodes
 }
 
-// ConnectBlock append block to end of chain
-func (c *Chain) ConnectBlock(block *legacy.Block) error {
-	c.state.cond.L.Lock()
-	defer c.state.cond.L.Unlock()
-	return c.connectBlock(block)
-}
+func (c *Chain) connectBlock(block *types.Block) (err error) {
+	bcBlock := types.MapBlock(block)
+	if bcBlock.TransactionStatus, err = c.store.GetTransactionStatus(&bcBlock.ID); err != nil {
+		return err
+	}
 
-func (c *Chain) connectBlock(block *legacy.Block) error {
-	bcBlock := legacy.MapBlock(block)
 	utxoView := state.NewUtxoViewpoint()
-
 	if err := c.store.GetTransactionsUtxo(utxoView, bcBlock.Transactions); err != nil {
 		return err
 	}
-	if err := utxoView.ApplyBlock(bcBlock); err != nil {
+	if err := utxoView.ApplyBlock(bcBlock, bcBlock.TransactionStatus); err != nil {
 		return err
 	}
 
-	blockHash := block.Hash()
-	if err := c.setState(block, utxoView, map[uint64]*bc.Hash{block.Height: &blockHash}); err != nil {
+	node := c.index.GetNode(&bcBlock.ID)
+	if err := c.setState(node, utxoView); err != nil {
 		return err
 	}
 
@@ -81,123 +80,157 @@ func (c *Chain) connectBlock(block *legacy.Block) error {
 	return nil
 }
 
-func (c *Chain) getReorganizeBlocks(block *legacy.Block) ([]*legacy.Block, []*legacy.Block) {
-	attachBlocks := []*legacy.Block{}
-	detachBlocks := []*legacy.Block{}
-	ancestor := block
-
-	for !c.inMainchain(ancestor) {
-		attachBlocks = append([]*legacy.Block{ancestor}, attachBlocks...)
-		ancestor, _ = c.GetBlockByHash(&ancestor.PreviousBlockHash)
-	}
-
-	for d := c.state.block; d.Hash() != ancestor.Hash(); d, _ = c.GetBlockByHash(&d.PreviousBlockHash) {
-		detachBlocks = append(detachBlocks, d)
-	}
-
-	return attachBlocks, detachBlocks
-}
-
-func (c *Chain) reorganizeChain(block *legacy.Block) error {
-	attachBlocks, detachBlocks := c.getReorganizeBlocks(block)
+func (c *Chain) reorganizeChain(node *state.BlockNode) error {
+	attachNodes, detachNodes := c.calcReorganizeNodes(node)
 	utxoView := state.NewUtxoViewpoint()
-	chainChanges := map[uint64]*bc.Hash{}
 
-	for _, d := range detachBlocks {
-		detachBlock := legacy.MapBlock(d)
+	for _, detachNode := range detachNodes {
+		b, err := c.store.GetBlock(&detachNode.Hash)
+		if err != nil {
+			return err
+		}
+
+		detachBlock := types.MapBlock(b)
 		if err := c.store.GetTransactionsUtxo(utxoView, detachBlock.Transactions); err != nil {
 			return err
 		}
-		if err := utxoView.DetachBlock(detachBlock); err != nil {
+		txStatus, err := c.GetTransactionStatus(&detachBlock.ID)
+		if err != nil {
 			return err
 		}
+		if err := utxoView.DetachBlock(detachBlock, txStatus); err != nil {
+			return err
+		}
+
+		log.WithFields(log.Fields{"height": node.Height, "hash": node.Hash.String()}).Debug("detach from mainchain")
 	}
 
-	for _, a := range attachBlocks {
-		attachBlock := legacy.MapBlock(a)
+	for _, attachNode := range attachNodes {
+		b, err := c.store.GetBlock(&attachNode.Hash)
+		if err != nil {
+			return err
+		}
+
+		attachBlock := types.MapBlock(b)
 		if err := c.store.GetTransactionsUtxo(utxoView, attachBlock.Transactions); err != nil {
 			return err
 		}
-		if err := utxoView.ApplyBlock(attachBlock); err != nil {
+		txStatus, err := c.GetTransactionStatus(&attachBlock.ID)
+		if err != nil {
 			return err
 		}
-		aHash := a.Hash()
-		chainChanges[a.Height] = &aHash
+		if err := utxoView.ApplyBlock(attachBlock, txStatus); err != nil {
+			return err
+		}
+
+		log.WithFields(log.Fields{"height": node.Height, "hash": node.Hash.String()}).Debug("attach from mainchain")
 	}
 
-	return c.setState(block, utxoView, chainChanges)
+	return c.setState(node, utxoView)
 }
 
 // SaveBlock will validate and save block into storage
-func (c *Chain) SaveBlock(block *legacy.Block) error {
-	preBlock, _ := c.GetBlockByHash(&block.PreviousBlockHash)
-	if err := c.ValidateBlock(block, preBlock); err != nil {
+func (c *Chain) saveBlock(block *types.Block) error {
+	bcBlock := types.MapBlock(block)
+	parent := c.index.GetNode(&block.PreviousBlockHash)
+
+	if err := validation.ValidateBlock(bcBlock, parent); err != nil {
+		return errors.Sub(ErrBadBlock, err)
+	}
+	if err := c.store.SaveBlock(block, bcBlock.TransactionStatus); err != nil {
 		return err
 	}
-	if err := c.store.SaveBlock(block); err != nil {
+
+	c.orphanManage.Delete(&bcBlock.ID)
+	node, err := state.NewBlockNode(&block.BlockHeader, parent)
+	if err != nil {
 		return err
 	}
-	blockHash := block.Hash()
-	log.WithFields(log.Fields{"height": block.Height, "hash": blockHash.String()}).Info("Block saved on disk")
+
+	c.index.AddNode(node)
 	return nil
 }
 
-func (c *Chain) findBestChainTail(block *legacy.Block) (bestBlock *legacy.Block) {
-	bestBlock = block
+func (c *Chain) saveSubBlock(block *types.Block) *types.Block {
 	blockHash := block.Hash()
-	preorphans, ok := c.orphanManage.preOrphans[blockHash]
+	prevOrphans, ok := c.orphanManage.GetPrevOrphans(&blockHash)
 	if !ok {
-		return
+		return block
 	}
 
-	for _, preorphan := range preorphans {
-		orphanBlock, ok := c.orphanManage.Get(preorphan)
+	bestBlock := block
+	for _, prevOrphan := range prevOrphans {
+		orphanBlock, ok := c.orphanManage.Get(prevOrphan)
 		if !ok {
+			log.WithFields(log.Fields{"hash": prevOrphan.String()}).Warning("saveSubBlock fail to get block from orphanManage")
+			continue
+		}
+		if err := c.saveBlock(orphanBlock); err != nil {
+			log.WithFields(log.Fields{"hash": prevOrphan.String(), "height": orphanBlock.Height}).Warning("saveSubBlock fail to save block")
 			continue
 		}
 
-		if err := c.SaveBlock(orphanBlock); err != nil {
-			log.WithFields(log.Fields{
-				"height": block.Height,
-				"hash":   blockHash.String(),
-			}).Errorf("findBestChainTail fail on save block %v", err)
-			continue
-		}
-
-		if subResult := c.findBestChainTail(orphanBlock); subResult.Height > bestBlock.Height {
-			bestBlock = subResult
+		if subBestBlock := c.saveSubBlock(orphanBlock); subBestBlock.Height > bestBlock.Height {
+			bestBlock = subBestBlock
 		}
 	}
+	return bestBlock
+}
 
-	c.orphanManage.Delete(&blockHash)
-	return
+type processBlockResponse struct {
+	isOrphan bool
+	err      error
+}
+
+type processBlockMsg struct {
+	block *types.Block
+	reply chan processBlockResponse
+}
+
+// ProcessBlock is the entry for chain update
+func (c *Chain) ProcessBlock(block *types.Block) (bool, error) {
+	reply := make(chan processBlockResponse, 1)
+	c.processBlockCh <- &processBlockMsg{block: block, reply: reply}
+	response := <-reply
+	return response.isOrphan, response.err
+}
+
+func (c *Chain) blockProcesser() {
+	for msg := range c.processBlockCh {
+		isOrphan, err := c.processBlock(msg.block)
+		msg.reply <- processBlockResponse{isOrphan: isOrphan, err: err}
+	}
 }
 
 // ProcessBlock is the entry for handle block insert
-func (c *Chain) ProcessBlock(block *legacy.Block) (bool, error) {
+func (c *Chain) processBlock(block *types.Block) (bool, error) {
 	blockHash := block.Hash()
 	if c.BlockExist(&blockHash) {
-		log.WithField("hash", blockHash.String()).Info("Skip process due to block already been handled")
-		return false, nil
+		log.WithFields(log.Fields{"hash": blockHash.String(), "height": block.Height}).Info("block has been processed")
+		return c.orphanManage.BlockExist(&blockHash), nil
 	}
-	if !c.store.BlockExist(&block.PreviousBlockHash) {
+
+	if parent := c.index.GetNode(&block.PreviousBlockHash); parent == nil {
 		c.orphanManage.Add(block)
 		return true, nil
 	}
-	if err := c.SaveBlock(block); err != nil {
+
+	if err := c.saveBlock(block); err != nil {
 		return false, err
 	}
 
-	bestBlock := c.findBestChainTail(block)
-	c.state.cond.L.Lock()
-	defer c.state.cond.L.Unlock()
-	if c.state.block.Hash() == bestBlock.PreviousBlockHash {
+	bestBlock := c.saveSubBlock(block)
+	bestBlockHash := bestBlock.Hash()
+	bestNode := c.index.GetNode(&bestBlockHash)
+
+	if bestNode.Parent == c.bestNode {
+		log.Debug("append block to the end of mainchain")
 		return false, c.connectBlock(bestBlock)
 	}
 
-	if bestBlock.Height > c.state.block.Height && bestBlock.Bits >= c.state.block.Bits {
-		return false, c.reorganizeChain(bestBlock)
+	if bestNode.Height > c.bestNode.Height && bestNode.WorkSum.Cmp(c.bestNode.WorkSum) >= 0 {
+		log.Debug("start to reorganize chain")
+		return false, c.reorganizeChain(bestNode)
 	}
-
 	return false, nil
 }

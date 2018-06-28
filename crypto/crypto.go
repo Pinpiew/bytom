@@ -22,6 +22,15 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+func DoubleSha256(b []byte) []byte {
+	hasher := sha3.New256()
+	hasher.Write(b)
+	sum := hasher.Sum(nil)
+	hasher.Reset()
+	hasher.Write(sum)
+	return hasher.Sum(nil)
+}
+
 func Sha256(data ...[]byte) []byte {
 	d := sha3.New256()
 	for _, b := range data {
@@ -47,27 +56,4 @@ func Ripemd160(data []byte) []byte {
 	ripemd.Write(data)
 
 	return ripemd.Sum(nil)
-}
-
-
-func zeroBytes(bytes []byte) {
-	for i := range bytes {
-		bytes[i] = 0
-	}
-}
-
-func toInt(bytes []byte) []int {
-	ints := make([]int, len(bytes))
-	for i := range bytes {
-		ints[i] = int(bytes[i])
-	}
-	return ints
-}
-
-func toBytes(ints []int) []byte {
-	bytes := make([]byte, len(ints))
-	for i := range ints {
-		bytes[i] = byte(ints[i])
-	}
-	return bytes
 }
